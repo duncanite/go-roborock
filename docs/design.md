@@ -2,7 +2,8 @@
 
 Research into Roborock robot vacuums, begun on 2026-11-15 from public sources, and what is
 built from it. Built so far: the login to the owner's account, which gives the account's
-way into Roborock's cloud and each device's key. Nothing speaks to a robot yet.
+way into Roborock's cloud and each device's key; and, through that cloud, a robot of the
+Q7 family read and driven.
 
 In short: most Roborock vacuums serve a TCP protocol on the LAN, and with the robot's
 local key a client reads and drives one there with no cloud at run time. The key comes
@@ -104,10 +105,19 @@ to follow for the models that have it.
 
 ### Shape
 
-- `roborock`: what reaches a device. `Cloud` is an account's way into Roborock's cloud:
-  the broker's address and what its user name and password are made of. `Identity` names
-  one device and holds the key its messages are encrypted under. Both show no secret when
-  formatted, logged or marshalled.
+- `roborock`: what reaches a device, and a robot through the cloud. `Cloud` is an
+  account's way into Roborock's cloud: the broker's address and what its user name and
+  password are made of. `Identity` names one device and holds the key its messages are
+  encrypted under. Both show no secret when formatted, logged or marshalled. `Connect`
+  opens a `Session` with the cloud, one connection for the account; `Session.Robot` opens
+  a `Robot` on it. `Robot.State` is what the robot is doing, each part nil when the robot
+  did not say it; `Start`, `Pause`, `Stop`, `Dock` and `Locate` drive it; `Properties`
+  and `Call` are the protocol by its own names. `Speaks` says a device is one this
+  package speaks to.
+- `roborock/roborocktest`: the cloud's broker, under TLS, with a robot behind it, for
+  tests.
+- `internal/wire`: a device's frame as the cloud carries it, and the B01 encryption.
+- `internal/mqtt`: the little of MQTT 5 the broker is spoken to in.
 - `roborock/account`: the login. `Ask` finds the account's region and has a code mailed;
   `Answer` logs in with it and gives a `Session`, whose `Cloud` is the account's;
   `Devices` gives the home's devices, each with its `Identity`. The standard library
@@ -115,7 +125,9 @@ to follow for the models that have it.
 - `roborock/account/accounttest`: the login servers and the cloud's API in one, for tests.
 - `cmd/roborock`: `account` logs in, with the code typed where it is asked for, and keeps
   the cloud's credentials and each device's key in the session file; `devices` prints the
-  devices that file holds. No key is printed.
+  devices that file holds. No key is printed. `status` prints what the robot is doing;
+  `start`, `pause`, `stop`, `dock` and `locate` drive it; `get` and `call` are the
+  protocol by its own names.
 
 ### Decisions
 
@@ -151,12 +163,40 @@ to follow for the models that have it.
 - **No limiter of its own.** python-roborock holds itself to a few logins an hour. Here
   every `Ask` is a person typing a command; Roborock's refusal is told apart as too often.
 
+- **An MQTT client of this module's own.** The broker wants a session opened with a user
+  name and a password, a subscription and messages at most once. The Go clients there are
+  carry the Eclipse licence, which the licence lane here refuses, or all of MQTT. Some
+  seven hundred and fifty lines on the standard library do what is needed, and are held to the bytes
+  the reference implementation's client writes.
+- **Under TLS, or not at all.** The broker's address comes from the login. One that is not
+  `ssl`, `tls` or `mqtts` is refused: the credentials would go in clear.
+- **One connection for the account**, which every robot is spoken to through, as the
+  reference implementation does to spare the broker.
+- **Nothing reconnects.** A session lost is over, and says so; whoever holds it opens
+  another. The cloud refuses an account asked too much with the reason it refuses bad
+  credentials with, and a client that reconnects on its own is how that is reached.
+- **A state is asked for, never told.** The reference implementation reads no push of a
+  Q7's properties: its shape is not known. A robot polled every three seconds through a
+  clean of a hundred minutes was reported to take it.
+- **A reading is never a default.** Each part of a state is nil when the robot did not say
+  it, or said it in a number there is no word for.
+- **A fault is not always a failure.** A robot back from a clean reports 2103 for as long
+  as it sits on its dock, and 2102 on its way there; the robot at hand, charged on its
+  dock, reported 2105, which the reference implementation has no name for.
+  `Fault.Failure` is true for the numbers that implementation names as something wrong,
+  and for no other: a number with no name is given as it is, and not called a failure.
+- **The Q7 family alone.** The protocol B01 has two families that speak differently; the
+  other, the Q10s, is refused as unsupported, with the devices of the other protocols.
+- **An answer is found by its number**, among everything a robot says on its topic: maps,
+  answers to other sessions of the account, frames that do not open. A request is padded
+  twice, as the reference implementation pads it; an answer is read padded once or twice.
+
 ### Next
 
-- The cloud's MQTT session for the B01 models: the broker's credentials from `Cloud`, the
-  frames, the encryption, and the Q7's status and commands.
 - The robot's TCP protocol, for the models that have one: frames and both encryptions are
   written and held back until a robot that speaks them is at hand.
+- Rooms, maps, consumables and the settings: the protocol has them, and nothing here reads
+  them yet but `get`.
 
 Go implementations exist and are young: [roborocli](https://github.com/jwmoss/roborocli)
 does the local protocol and the cloud, [go-roborock](https://github.com/portpowered/go-roborock)
@@ -183,6 +223,13 @@ the cloud only.
   written, and `devices` printed the same from it. The cloud's credentials and the
   device's key it holds were then taken by Roborock's broker and by the robot.
 
+- `status` and `locate` were run on 2026-11-23 against the real Q7 M5+, through the
+  session file `account` wrote. The broker took the credentials derived from the login,
+  under TLS; the robot answered a request written as JSON with no spaces, under a number
+  of twelve digits, padded twice. `status` printed it charging at 100%, its suction
+  balanced, its water medium, its mode vacuum, its dock idle, and its fault 2105.
+  `locate` was taken, and the robot answered.
+
 ## Open questions
 
 - Whether maps and rooms are wanted, or starting, stopping and docking are enough.
@@ -199,7 +246,22 @@ the cloud only.
   servers show; the bound on an answer's size; the command's timeout.
 - How long the cloud's credentials of a login stay good, and whether a new login ends an
   older one's.
-- Nothing above was observed on a robot, but for its silence on the LAN.
+- Against the real robot: `start`, `pause`, `stop` and `dock`, every activity but
+  charging, a fault that is one, a dock that empties, a robot that refuses, a session
+  kept for longer than one command and its pings, and a session the broker ends. Those
+  were run against this module's own cloud only, which was written from the same notes
+  as the client. What holds them to the reference implementation is its recorded session
+  of a Q7: the MQTT client writes that session's packets byte for byte, the frame layer
+  makes its frames byte for byte from their content, and the test cloud takes the
+  credentials it derives.
+- What the fault 2105 means.
+- Whether a robot takes a request padded once, or a number shorter than twelve digits.
+- Whether `Start` goes on with a paused clean or begins another: the protocol has no
+  resume.
+- Which number a Q7 gives for its activity while it vacuums without mopping.
+- Held by no test: that a packet of MQTT is never numbered zero.
+- Of the device and the ways in described above, nothing was observed on a robot but
+  what [Observed](#observed) records.
 - Which protocol version the newest models speak: the table read names series, not every
   model.
 - Whether maps can be fetched over the local connection.

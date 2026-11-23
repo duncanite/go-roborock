@@ -10,11 +10,11 @@ test: do::test::go::unit do::test::go::race do::test::go::cover
 security: do::security::default do::security::go::default
 
 # The command, built from this module at the commit checked out:
-# `just roborock devices`.
+# `just roborock status`.
 
 # Positional, so an argument with a space in it reaches the command as one
 # argument.
-[doc('Build roborock and run it: `just roborock devices`.')]
+[doc('Build roborock and run it: `just roborock status`.')]
 [positional-arguments]
 roborock +args: build-roborock
     .build/roborock "$@"

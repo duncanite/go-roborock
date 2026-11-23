@@ -1,8 +1,14 @@
-// Package roborock holds what reaches a Roborock device: an account's way
-// into Roborock's cloud, and what names one device and opens its
-// messages. The account package gives both, from a login.
+// Package roborock speaks to Roborock robot vacuums of the Q7 family,
+// which have no protocol on the LAN, through Roborock's cloud: what a
+// robot is doing, and starting, pausing, stopping, docking and locating
+// it.
 //
-// Nothing is written anywhere: where they are kept is the program's
+// A robot is reached with two things the account package gives, from a
+// login: the account's Cloud, and the robot's Identity. Connect opens a
+// session with the cloud, and Session.Robot a robot on it.
+//
+// Roborock documents none of this; it follows the open implementations.
+// Nothing is written anywhere: where a login is kept is the program's
 // business.
 package roborock
 
