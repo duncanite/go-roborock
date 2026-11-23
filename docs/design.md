@@ -1,13 +1,15 @@
 # go-roborock: the design
 
-Research into Roborock robot vacuums, done on 2026-11-15 from public sources, to decide
-what a Go module for them would be. Nothing is built and nothing here was run against a
-robot. The decisions at the end are open.
+Research into Roborock robot vacuums, begun on 2026-11-15 from public sources, and what is
+built from it. Built so far: the login to the owner's account, which gives the account's
+way into Roborock's cloud and each device's key. Nothing speaks to a robot yet.
 
 In short: most Roborock vacuums serve a TCP protocol on the LAN, and with the robot's
 local key a client reads and drives one there with no cloud at run time. The key comes
 from the owner's Roborock account, once. Roborock documents none of this. Some newer
-models also speak Matter, which carries less. A few models have no local protocol at all.
+models also speak Matter, which carries less. A few models have no local protocol at all:
+the robot this module is first run against, a Q7 M5+, is one of them, and is reached
+through Roborock's cloud alone.
 
 ## The device
 
@@ -55,6 +57,22 @@ carries the same commands. It is the only route for the A01 and B01 models. Home
 Assistant's page warns that Roborock's cloud "may ban your IP address" for too many
 requests.
 
+The login, as python-roborock makes it (`roborock/web_api/`) and Home Assistant uses it:
+
+- Roborock has a login server per region: the United States, Europe, China, Russia. Each
+  is asked in turn where the account is; one that does not know it answers with no
+  country.
+- The region's server is asked to mail a one-time code, and the login is made with it.
+  The login names the version of the user agreement the account accepted, which the
+  server gives; an account that never accepted it in the app is refused.
+- The login gives a token for the login server and, for the cloud, an id, two secrets and
+  an HMAC key, with the addresses of the cloud's API and of its MQTT broker. Roborock
+  issues new ones with every login.
+- The login server gives the id of the account's home. The cloud's API gives the home:
+  the account's devices and those shared with it, each with its id, its key, its protocol
+  version and its product. The request is signed with the HMAC key, over the account's id,
+  a nonce, the time and the digest of the path.
+
 ### Matter (local, official)
 
 Roborock [announced Matter](https://newsroom.roborock.com/gl/news/roborock-releases-matter-protocol-update-leading-smart-home-integration)
@@ -79,32 +97,109 @@ Q7 Max, and most need the robot taken apart.
 | Gives | status, consumables, rooms, every command | the same, and maps | modes, state, rooms |
 | Risk | a firmware update can change the protocol, as L01 did | the login changing; request limits | less than the robot can do |
 
-## What this module would be
+## What this module is
 
-Not decided. The options, most local first:
+The cloud first, since the robot at hand has no other route; the robot's TCP protocol is
+to follow for the models that have it.
 
-1. **A client of the robot's TCP protocol**: the framing, both encryptions, the hello
-   and the ping, the commands; discovery by the UDP broadcast or a given address. The key
-   and the robot's id are configuration, fetched once by a login subcommand.
-2. **The cloud's MQTT**, the same commands over another transport: for a model with no
-   local protocol, and for maps.
-3. **Matter**, as a client of a Matter controller, where the model has it and the
-   smaller set is enough.
+### Shape
+
+- `roborock`: what reaches a device. `Cloud` is an account's way into Roborock's cloud:
+  the broker's address and what its user name and password are made of. `Identity` names
+  one device and holds the key its messages are encrypted under. Both show no secret when
+  formatted, logged or marshalled.
+- `roborock/account`: the login. `Ask` finds the account's region and has a code mailed;
+  `Answer` logs in with it and gives a `Session`, whose `Cloud` is the account's;
+  `Devices` gives the home's devices, each with its `Identity`. The standard library
+  alone.
+- `roborock/account/accounttest`: the login servers and the cloud's API in one, for tests.
+- `cmd/roborock`: `account` logs in, with the code typed where it is asked for, and keeps
+  the cloud's credentials and each device's key in the session file; `devices` prints the
+  devices that file holds. No key is printed.
+
+### Decisions
+
+- **The newer login, the one Home Assistant uses.** python-roborock has two generations
+  of the code login; its own command line uses the older, Home Assistant the newer
+  (`request_code_v4`, `code_login_v4`). The newer is the one used here, alone: the one the
+  most installations exercise.
+- **Only HTTPS, wherever the API sends the client.** A region's server names the server to
+  log in to, and the login names the cloud's API. Each is a stranger's text that the next
+  request, with the account's address or a signature, would go to: one that is not an
+  HTTPS address with no user in it is refused, and nothing is sent.
+- **A transport of its own, which speaks TLS 1.2.** Roborock's login servers complete a
+  handshake at TLS 1.2 with a NIST curve, and at nothing later. A program that narrows the
+  process's default transport to TLS 1.3, as the toolkit this command is built on does,
+  reaches none of them through it. The client given no HTTP client makes its own, at TLS
+  1.2 and above, and does not use the process's default.
+- **A region that does not answer does not hide the account in another.** The next is
+  asked. When none then knows the account, the error is that of the first that did not
+  answer, with how many did not: the account may be its. A region that answers with a
+  refusal ends the search.
+- **An error names the server asked**, and nothing else of the address asked.
+- **No error carries the address, the code or a key.** The message Roborock refuses with
+  is not handed on, only its code; an HTTP client's error is handed on without the URL,
+  whose query holds the address.
+- **A session file, written by the command.** A login gives seven values that later
+  commands need, and Roborock limits how often a code is asked for. The command keeps them
+  in a file its owner alone reads, and prints none. The library writes nothing: where a
+  login is kept is the program's business.
+- **One device unread does not hide the others.** A device the home lists with no id or
+  no key is left out and said.
+- **The client names itself as the app does.** The login is taken from the app: the
+  version, system and phone model the open implementations send are sent here.
+- **No limiter of its own.** python-roborock holds itself to a few logins an hour. Here
+  every `Ask` is a person typing a command; Roborock's refusal is told apart as too often.
+
+### Next
+
+- The cloud's MQTT session for the B01 models: the broker's credentials from `Cloud`, the
+  frames, the encryption, and the Q7's status and commands.
+- The robot's TCP protocol, for the models that have one: frames and both encryptions are
+  written and held back until a robot that speaks them is at hand.
 
 Go implementations exist and are young: [roborocli](https://github.com/jwmoss/roborocli)
 does the local protocol and the cloud, [go-roborock](https://github.com/portpowered/go-roborock)
 the cloud only.
 
+## Observed
+
+- A Q7 M5+ set up in the Roborock app broadcasts nothing on UDP port 58866: ten seconds
+  of listening on its network heard no robot, as its protocol version says.
+- Asked on 2026-11-22 about an address that is no account, the login server of the United
+  States answered success with no country, as the open implementations expect, and with
+  a warning beside it: "This endpoint is deprecated and will be removed." What replaces
+  it is not known. The command, run with such an address, asked the four regions and said
+  that none knows the account; it wrote nothing.
+- The same server refused the same question with code 9002 after a handful of requests
+  within a minute.
+- The login servers of the United States and of Europe completed a handshake at TLS 1.2
+  with P-256, and closed the connection on one offered at TLS 1.3 alone, or with X25519
+  and its post-quantum hybrid as the only key exchanges.
+- `account` was run on 2026-11-23 against a real account in the United States: the code
+  was mailed and taken, the login made, and the home, asked for under the signature,
+  listed one device. It is the Q7 M5+, shared with the account by another: the model
+  `roborock.vacuum.sc05`, the protocol B01, the firmware 03.01.80. The session file was
+  written, and `devices` printed the same from it. The cloud's credentials and the
+  device's key it holds were then taken by Roborock's broker and by the robot.
+
 ## Open questions
 
-- The robot's model, and its model code in the app's device information: it gives the
-  protocol version, and so whether a local route exists.
-- Whether it is set up in the Roborock app or in Mi Home.
 - Whether maps and rooms are wanted, or starting, stopping and docking are enough.
+- What a client asks in place of the region lookup once Roborock removes it.
 
 ## Not verified
 
-- Nothing above was observed on a robot.
+- Beyond [Observed](#observed), the login was run against this module's stand-in only,
+  which was written from the same sources as the client.
+- A region other than the United States, a home with devices of the account's own or
+  with several devices, an account that has not accepted the user agreement, and every
+  refusal but the one observed.
+- Held by no test: that the client's own transport speaks TLS 1.2, which only Roborock's
+  servers show; the bound on an answer's size; the command's timeout.
+- How long the cloud's credentials of a login stay good, and whether a new login ends an
+  older one's.
+- Nothing above was observed on a robot, but for its silence on the LAN.
 - Which protocol version the newest models speak: the table read names series, not every
   model.
 - Whether maps can be fetched over the local connection.
@@ -117,9 +212,13 @@ the cloud only.
 - [Home Assistant, Roborock](https://www.home-assistant.io/integrations/roborock/): the
   ports, local and cloud together, maps through the cloud, the warning on request limits.
 - [python-roborock](https://github.com/Python-roborock/python-roborock): the protocol,
-  which models have a local one, where the local key comes from.
+  which models have a local one, where the local key comes from. The login was read at
+  [186bab8](https://github.com/Python-roborock/python-roborock/tree/186bab8350289080b80a515bc1cd9dadf9379d26/roborock/web_api).
+- [Home Assistant's Roborock login](https://github.com/home-assistant/core/blob/dev/homeassistant/components/roborock/config_flow.py):
+  which generation of the login it uses.
 - [roborocli](https://github.com/jwmoss/roborocli): a Go implementation, and its notes on
-  the newer encryption.
+  the newer encryption, read at
+  [0a4afa2](https://github.com/jwmoss/roborocli/tree/0a4afa2642691f4577e22260eef27e845b27d5b1).
 - [go-roborock](https://github.com/portpowered/go-roborock): a Go client of the cloud.
 - [Roborock, Matter protocol update](https://newsroom.roborock.com/gl/news/roborock-releases-matter-protocol-update-leading-smart-home-integration):
   the models and firmware with Matter.
